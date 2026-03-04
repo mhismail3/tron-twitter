@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-TRON_TWITTER_DIR = Path.home() / ".tron" / "twitter"
+TRON_TWITTER_DIR = Path.home() / ".tron" / "mods" / "twitter"
 COOKIES_PATH = TRON_TWITTER_DIR / "cookies.json"
 CONFIG_PATH = TRON_TWITTER_DIR / "config.json"
 
