@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tron-twitter"
+version = "0.1.0"
+description = "Twitter/X CLI for Tron agent"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "twikit>=2.3.0",
+    "click>=8.0",
+]
+
+[project.scripts]
+tron-twitter = "tron_twitter.cli:main"
