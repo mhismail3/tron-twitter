@@ -339,6 +339,22 @@ async def retweet_tweet(tweet_id: str) -> dict:
     return {"retweeted": True, "tweet_id": tweet_id}
 
 
+async def follow_user_by_username(username: str) -> dict:
+    client = get_client()
+    await load_session(client)
+    user = await client.get_user_by_screen_name(username)
+    await client.follow_user(user.id)
+    return {"followed": True, "username": username, "user_id": user.id}
+
+
+async def unfollow_user_by_username(username: str) -> dict:
+    client = get_client()
+    await load_session(client)
+    user = await client.get_user_by_screen_name(username)
+    await client.unfollow_user(user.id)
+    return {"unfollowed": True, "username": username, "user_id": user.id}
+
+
 # --- Formatters ---
 
 

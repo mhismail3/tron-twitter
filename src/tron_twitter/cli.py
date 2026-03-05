@@ -10,6 +10,7 @@ from .client import (
     check_dms,
     check_mentions,
     check_session,
+    follow_user_by_username,
     get_dm_history_by_username,
     get_dm_inbox,
     get_notifications,
@@ -26,6 +27,7 @@ from .client import (
     run_async,
     search_tweets,
     send_dm_by_username,
+    unfollow_user_by_username,
 )
 
 
@@ -352,6 +354,30 @@ def dm(username, text):
     """Send a DM to a user."""
     try:
         result = run_async(send_dm_by_username(username, text))
+        click.echo(json.dumps(result, indent=2, ensure_ascii=False))
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command()
+@click.argument("username")
+def follow(username):
+    """Follow a user."""
+    try:
+        result = run_async(follow_user_by_username(username))
+        click.echo(json.dumps(result, indent=2, ensure_ascii=False))
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command()
+@click.argument("username")
+def unfollow(username):
+    """Unfollow a user."""
+    try:
+        result = run_async(unfollow_user_by_username(username))
         click.echo(json.dumps(result, indent=2, ensure_ascii=False))
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
