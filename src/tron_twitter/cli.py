@@ -7,8 +7,10 @@ import click
 
 from . import __version__
 from .client import (
+    check_dms,
     check_mentions,
     check_session,
+    get_dm_history_by_username,
     get_notifications,
     get_timeline,
     get_trending,
@@ -22,6 +24,7 @@ from .client import (
     retweet_tweet,
     run_async,
     search_tweets,
+    send_dm_by_username,
 )
 
 
@@ -65,6 +68,12 @@ def _print_item(item: dict):
         if item.get("location"):
             click.echo(f"  Location: {item['location']}")
         click.echo(f"  {item.get('profile_url', '')}")
+    elif "sender_id" in item and "recipient_id" in item:
+        # DM Message
+        click.echo(f"[{item.get('time', '')}] {item.get('sender_id', '')} → {item.get('recipient_id', '')}")
+        click.echo(f"  {item.get('text', '')}")
+        if item.get("attachment"):
+            click.echo(f"  attachment: {item['attachment']}")
     elif "timestamp_ms" in item and "message" in item:
         # Notification
         click.echo(item.get("message", ""))
@@ -239,6 +248,33 @@ def check_mentions_cmd(ctx, peek):
         sys.exit(1)
 
 
+@main.command("dm-history")
+@click.argument("username")
+@click.option("--count", default=20, help="Number of messages")
+@click.pass_context
+def dm_history(ctx, username, count):
+    """Get DM conversation history with a user."""
+    try:
+        results = run_async(get_dm_history_by_username(username, count=count))
+        output(results, ctx.obj["fmt"])
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command("check-dms")
+@click.option("--peek", is_flag=True, help="Preview without updating state")
+@click.pass_context
+def check_dms_cmd(ctx, peek):
+    """Get new DMs since last check (stateful)."""
+    try:
+        results = run_async(check_dms(peek=peek))
+        output(results, ctx.obj["fmt"])
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
 # --- Write ---
 
 
@@ -285,6 +321,19 @@ def retweet(tweet_id):
     """Retweet a tweet."""
     try:
         result = run_async(retweet_tweet(tweet_id))
+        click.echo(json.dumps(result, indent=2, ensure_ascii=False))
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command()
+@click.argument("username")
+@click.argument("text")
+def dm(username, text):
+    """Send a DM to a user."""
+    try:
+        result = run_async(send_dm_by_username(username, text))
         click.echo(json.dumps(result, indent=2, ensure_ascii=False))
     except Exception as e:
         click.echo(f"Error: {e}", err=True)

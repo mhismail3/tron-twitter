@@ -126,6 +126,87 @@ async def check_mentions(peek: bool = False) -> list[dict]:
     return new_mentions
 
 
+async def get_dm_history(user_id: str, count: int = 20) -> list[dict]:
+    client = get_client()
+    await load_session(client)
+    result = await client.get_dm_history(user_id)
+    messages = list(result)[:count]
+    return [format_message(m) for m in messages]
+
+
+async def get_dm_history_by_username(username: str, count: int = 20) -> list[dict]:
+    client = get_client()
+    await load_session(client)
+    user = await client.get_user_by_screen_name(username)
+    result = await client.get_dm_history(user.id)
+    messages = list(result)[:count]
+    return [format_message(m) for m in messages]
+
+
+async def send_dm(user_id: str, text: str) -> dict:
+    client = get_client()
+    await load_session(client)
+    msg = await client.send_dm(user_id, text)
+    return format_message(msg)
+
+
+async def send_dm_by_username(username: str, text: str) -> dict:
+    client = get_client()
+    await load_session(client)
+    user = await client.get_user_by_screen_name(username)
+    msg = await client.send_dm(user.id, text)
+    return format_message(msg)
+
+
+async def check_dms(peek: bool = False) -> list[dict]:
+    """Get new DMs since last check. Updates state unless peek=True."""
+    client = get_client()
+    await load_session(client)
+    state = _load_state()
+    last_ts = state.get("last_dm_ts", "0")
+
+    # Get our own user ID to filter out our own messages
+    me = await client.user()
+    my_id = me.id
+
+    # Fetch recent DM notifications to find conversations with new messages
+    # Then pull actual message history
+    notifications = await client.get_notifications("All", count=40)
+    dm_user_ids = set()
+    for n in notifications:
+        if n.message and "direct message" in (n.message or "").lower():
+            if n.from_user:
+                dm_user_ids.add(n.from_user.id)
+
+    # Also check recent DM history from known conversations
+    # Fall back to pulling from all notification senders
+    new_messages = []
+    seen_ids = set()
+
+    for uid in dm_user_ids:
+        try:
+            result = await client.get_dm_history(uid)
+            for m in result:
+                if m.id in seen_ids:
+                    continue
+                if m.sender_id == my_id:
+                    continue
+                if m.time > last_ts:
+                    seen_ids.add(m.id)
+                    new_messages.append(format_message(m))
+        except Exception:
+            continue
+
+    new_messages.sort(key=lambda m: m["time"])
+
+    if new_messages and not peek:
+        newest_ts = max(m["time"] for m in new_messages)
+        state["last_dm_ts"] = newest_ts
+        _save_state(state)
+
+    return new_messages
+
+
 def _load_state() -> dict:
     if STATE_PATH.exists():
         with open(STATE_PATH) as f:
@@ -208,6 +289,17 @@ def format_user(user) -> dict:
         "tweets": user.statuses_count,
         "created_at": user.created_at,
         "profile_url": f"https://x.com/{user.screen_name}",
+    }
+
+
+def format_message(msg) -> dict:
+    return {
+        "id": msg.id,
+        "time": msg.time,
+        "text": msg.text,
+        "sender_id": msg.sender_id,
+        "recipient_id": msg.recipient_id,
+        "attachment": msg.attachment,
     }
 
 
