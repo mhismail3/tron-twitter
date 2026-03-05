@@ -11,6 +11,7 @@ from .client import (
     check_mentions,
     check_session,
     get_dm_history_by_username,
+    get_dm_inbox,
     get_notifications,
     get_timeline,
     get_trending,
@@ -68,9 +69,14 @@ def _print_item(item: dict):
         if item.get("location"):
             click.echo(f"  Location: {item['location']}")
         click.echo(f"  {item.get('profile_url', '')}")
-    elif "sender_id" in item and "recipient_id" in item:
+    elif "sender_id" in item and ("recipient_id" in item or "conversation_id" in item):
         # DM Message
-        click.echo(f"[{item.get('time', '')}] {item.get('sender_id', '')} → {item.get('recipient_id', '')}")
+        sender = item.get("sender_screen_name") or item.get("sender_id", "")
+        recipient = item.get("recipient_id", "")
+        if sender and recipient:
+            click.echo(f"[{item.get('time', '')}] @{sender} → {recipient}")
+        else:
+            click.echo(f"[{item.get('time', '')}] @{sender}")
         click.echo(f"  {item.get('text', '')}")
         if item.get("attachment"):
             click.echo(f"  attachment: {item['attachment']}")
@@ -243,6 +249,18 @@ def check_mentions_cmd(ctx, peek):
     try:
         results = run_async(check_mentions(peek=peek))
         output(results, ctx.obj["fmt"])
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command()
+@click.pass_context
+def dms(ctx):
+    """List DM conversations (inbox)."""
+    try:
+        result = run_async(get_dm_inbox())
+        output(result, ctx.obj["fmt"])
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)

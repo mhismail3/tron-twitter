@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tron-twitter"
-version = "0.3.0"
+version = "0.4.0"
 description = "Twitter/X CLI for Tron agent"
 readme = "README.md"
 license = "MIT"

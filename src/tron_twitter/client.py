@@ -126,6 +126,88 @@ async def check_mentions(peek: bool = False) -> list[dict]:
     return new_mentions
 
 
+DM_INBOX_PARAMS = {
+    "context": "FETCH_DM_CONVERSATION",
+    "include_profile_interstitial_type": "1",
+    "include_blocking": "1",
+    "include_blocked_by": "1",
+    "include_followed_by": "1",
+    "include_want_retweets": "1",
+    "include_mute_edge": "1",
+    "include_can_dm": "1",
+    "include_can_media_tag": "1",
+    "include_ext_is_blue_verified": "1",
+    "include_ext_verified_type": "1",
+    "include_ext_profile_image_shape": "1",
+    "skip_status": "1",
+    "dm_secret_conversations_enabled": "false",
+    "krs_registration_enabled": "true",
+    "cards_platform": "Web-12",
+    "include_cards": "1",
+    "include_ext_alt_text": "true",
+    "include_ext_limited_action_results": "false",
+    "include_quote_count": "true",
+    "include_reply_count": "1",
+    "tweet_mode": "extended",
+    "include_ext_views": "true",
+    "dm_users": "false",
+    "include_groups": "true",
+    "include_inbox_timelines": "true",
+    "include_ext_media_color": "true",
+    "supports_reactions": "true",
+    "include_conversation_info": "true",
+}
+
+DM_INBOX_URL = "https://x.com/i/api/1.1/dm/inbox_initial_state.json"
+
+
+async def get_dm_inbox() -> dict:
+    """Fetch the DM inbox via Twitter's internal API. Returns conversations,
+    recent messages, and user info."""
+    client = get_client()
+    await load_session(client)
+    response, _ = await client.get(
+        DM_INBOX_URL,
+        params=DM_INBOX_PARAMS,
+        headers=client._base_headers,
+    )
+    inbox = response.get("inbox_initial_state", response)
+    users = inbox.get("users", {})
+
+    conversations = []
+    for conv_id, conv in inbox.get("conversations", {}).items():
+        conv_data = {
+            "conversation_id": conv_id,
+            "type": conv.get("type"),
+            "sort_timestamp": conv.get("sort_timestamp"),
+            "participants": [],
+        }
+        for p in conv.get("participants", []):
+            uid = p.get("user_id", "")
+            user_info = users.get(uid, {})
+            conv_data["participants"].append({
+                "user_id": uid,
+                "name": user_info.get("name", ""),
+                "screen_name": user_info.get("screen_name", ""),
+            })
+        # Attach the most recent message from entries
+        for entry in inbox.get("entries", []):
+            msg = entry.get("message", {})
+            if msg.get("conversation_id") == conv_id:
+                md = msg.get("message_data", {})
+                conv_data["last_message"] = {
+                    "id": md.get("id"),
+                    "time": md.get("time"),
+                    "text": md.get("text", ""),
+                    "sender_id": md.get("sender_id"),
+                }
+                break
+        conversations.append(conv_data)
+
+    conversations.sort(key=lambda c: c.get("sort_timestamp", "0"), reverse=True)
+    return {"conversations": conversations, "total": len(conversations)}
+
+
 async def get_dm_history(user_id: str, count: int = 20) -> list[dict]:
     client = get_client()
     await load_session(client)
@@ -159,43 +241,49 @@ async def send_dm_by_username(username: str, text: str) -> dict:
 
 
 async def check_dms(peek: bool = False) -> list[dict]:
-    """Get new DMs since last check. Updates state unless peek=True."""
+    """Get new DMs since last check. Uses inbox API for proper discovery."""
     client = get_client()
     await load_session(client)
     state = _load_state()
     last_ts = state.get("last_dm_ts", "0")
 
-    # Get our own user ID to filter out our own messages
     me = await client.user()
     my_id = me.id
 
-    # Fetch recent DM notifications to find conversations with new messages
-    # Then pull actual message history
-    notifications = await client.get_notifications("All", count=40)
-    dm_user_ids = set()
-    for n in notifications:
-        if n.message and "direct message" in (n.message or "").lower():
-            if n.from_user:
-                dm_user_ids.add(n.from_user.id)
+    # Fetch inbox to discover all conversations with recent activity
+    response, _ = await client.get(
+        DM_INBOX_URL,
+        params=DM_INBOX_PARAMS,
+        headers=client._base_headers,
+    )
+    inbox = response.get("inbox_initial_state", response)
+    users = inbox.get("users", {})
 
-    # Also check recent DM history from known conversations
-    # Fall back to pulling from all notification senders
     new_messages = []
-    seen_ids = set()
-
-    for uid in dm_user_ids:
-        try:
-            result = await client.get_dm_history(uid)
-            for m in result:
-                if m.id in seen_ids:
-                    continue
-                if m.sender_id == my_id:
-                    continue
-                if m.time > last_ts:
-                    seen_ids.add(m.id)
-                    new_messages.append(format_message(m))
-        except Exception:
+    for entry in inbox.get("entries", []):
+        msg = entry.get("message")
+        if not msg:
             continue
+        md = msg.get("message_data", {})
+        sender_id = md.get("sender_id", "")
+        msg_time = md.get("time", "0")
+
+        if sender_id == my_id:
+            continue
+        if msg_time <= last_ts:
+            continue
+
+        sender_info = users.get(sender_id, {})
+        new_messages.append({
+            "id": md.get("id"),
+            "time": msg_time,
+            "text": md.get("text", ""),
+            "sender_id": sender_id,
+            "sender_screen_name": sender_info.get("screen_name", ""),
+            "sender_name": sender_info.get("name", ""),
+            "conversation_id": msg.get("conversation_id"),
+            "attachment": md.get("attachment"),
+        })
 
     new_messages.sort(key=lambda m: m["time"])
 
