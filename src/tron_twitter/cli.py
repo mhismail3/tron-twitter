@@ -7,7 +7,9 @@ import click
 
 from . import __version__
 from .client import (
+    check_mentions,
     check_session,
+    get_notifications,
     get_timeline,
     get_trending,
     get_tweet,
@@ -63,6 +65,15 @@ def _print_item(item: dict):
         if item.get("location"):
             click.echo(f"  Location: {item['location']}")
         click.echo(f"  {item.get('profile_url', '')}")
+    elif "timestamp_ms" in item and "message" in item:
+        # Notification
+        click.echo(item.get("message", ""))
+        if item.get("from_user"):
+            u = item["from_user"]
+            click.echo(f"  from @{u['screen_name']} ({u['name']})")
+        if item.get("tweet"):
+            click.echo(f"  tweet: {item['tweet']['text'][:120]}")
+        click.echo(f"  {item.get('timestamp_ms', '')}")
     elif "name" in item and "tweets_count" in item:
         # Trend
         count = item.get("tweets_count")
@@ -196,6 +207,33 @@ def tweet(ctx, tweet_id):
     try:
         result = run_async(get_tweet(tweet_id))
         output(result, ctx.obj["fmt"])
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command()
+@click.option("--type", "notif_type", type=click.Choice(["All", "Verified", "Mentions"]), default="All")
+@click.option("--count", default=20, help="Number of results")
+@click.pass_context
+def notifications(ctx, notif_type, count):
+    """Get notifications."""
+    try:
+        results = run_async(get_notifications(notif_type, count=count))
+        output(results, ctx.obj["fmt"])
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command("check-mentions")
+@click.option("--peek", is_flag=True, help="Preview without updating state")
+@click.pass_context
+def check_mentions_cmd(ctx, peek):
+    """Get new mentions since last check (stateful)."""
+    try:
+        results = run_async(check_mentions(peek=peek))
+        output(results, ctx.obj["fmt"])
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)

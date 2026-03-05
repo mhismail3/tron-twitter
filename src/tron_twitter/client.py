@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from twikit import Client
 
-from .config import COOKIES_PATH, ensure_dirs
+from .config import COOKIES_PATH, STATE_PATH, ensure_dirs
 
 
 def get_client() -> Client:
@@ -100,6 +100,45 @@ async def get_tweet(tweet_id: str) -> dict:
     return format_tweet(tweet)
 
 
+async def get_notifications(type: str = "All", count: int = 20) -> list[dict]:
+    client = get_client()
+    await load_session(client)
+    result = await client.get_notifications(type, count=count)
+    return [format_notification(n) for n in result]
+
+
+async def check_mentions(peek: bool = False) -> list[dict]:
+    """Get new mentions since last check. Updates state unless peek=True."""
+    state = _load_state()
+    last_ts = state.get("last_mention_ts", 0)
+
+    notifications = await get_notifications("Mentions")
+    new_mentions = [
+        n for n in notifications
+        if int(n.get("timestamp_ms", 0)) > last_ts
+    ]
+
+    if new_mentions and not peek:
+        newest_ts = max(int(n["timestamp_ms"]) for n in new_mentions)
+        state["last_mention_ts"] = newest_ts
+        _save_state(state)
+
+    return new_mentions
+
+
+def _load_state() -> dict:
+    if STATE_PATH.exists():
+        with open(STATE_PATH) as f:
+            return json.load(f)
+    return {}
+
+
+def _save_state(state: dict):
+    ensure_dirs()
+    with open(STATE_PATH, "w") as f:
+        json.dump(state, f, indent=2)
+
+
 # --- Write operations ---
 
 
@@ -170,6 +209,23 @@ def format_user(user) -> dict:
         "created_at": user.created_at,
         "profile_url": f"https://x.com/{user.screen_name}",
     }
+
+
+def format_notification(notif) -> dict:
+    data = {
+        "id": notif.id,
+        "timestamp_ms": notif.timestamp_ms,
+        "message": notif.message,
+        "icon": notif.icon,
+    }
+    if notif.tweet:
+        data["tweet"] = format_tweet(notif.tweet)
+    if notif.from_user:
+        data["from_user"] = {
+            "name": notif.from_user.name,
+            "screen_name": notif.from_user.screen_name,
+        }
+    return data
 
 
 def format_trend(trend) -> dict:
