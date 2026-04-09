@@ -1,62 +1,36 @@
-"""Twikit wrapper — auth, session management, and formatted output."""
+"""Twikit wrapper — stateless operations authed via environment cookies."""
 
 import asyncio
-import json
-from datetime import datetime, timezone
 
 from twikit import Client
 
-from .config import COOKIES_PATH, STATE_PATH, ensure_dirs
+from .config import load_cookies, load_state
 
 
 def get_client() -> Client:
     return Client("en-US")
 
 
-async def load_session(client: Client) -> bool:
-    """Load saved cookies. Returns True if cookies exist."""
-    if not COOKIES_PATH.exists():
-        return False
-    client.load_cookies(str(COOKIES_PATH))
-    return True
-
-
-async def save_session(client: Client):
-    """Save current cookies to disk."""
-    ensure_dirs()
-    client.save_cookies(str(COOKIES_PATH))
-
-
-async def login_with_credentials(username: str, email: str, password: str) -> Client:
+async def authed_client() -> Client:
+    """Build a `Client` and apply cookies from `TRON_TWITTER_COOKIES`."""
+    cookies = load_cookies()
     client = get_client()
-    await client.login(
-        auth_info_1=username,
-        auth_info_2=email,
-        password=password,
+    client.set_cookies(
+        {"auth_token": cookies["auth_token"], "ct0": cookies["ct0"]},
+        clear_cookies=True,
     )
-    await save_session(client)
-    return client
-
-
-async def login_with_cookies(auth_token: str, ct0: str) -> Client:
-    client = get_client()
-    client.set_cookies({"auth_token": auth_token, "ct0": ct0}, clear_cookies=True)
-    await save_session(client)
     return client
 
 
 async def check_session() -> dict:
-    """Validate the current session. Returns status info."""
-    client = get_client()
-    if not await load_session(client):
-        return {"valid": False, "reason": "No saved cookies"}
+    """Validate the current session."""
     try:
-        # Attempt a lightweight call to validate the session
+        client = await authed_client()
+    except Exception as e:
+        return {"valid": False, "reason": str(e)}
+    try:
         user = await client.user()
-        return {
-            "valid": True,
-            "user": format_user(user),
-        }
+        return {"valid": True, "user": format_user(user)}
     except Exception as e:
         return {"valid": False, "reason": str(e)}
 
@@ -65,52 +39,53 @@ async def check_session() -> dict:
 
 
 async def search_tweets(query: str, count: int = 20, product: str = "Top") -> list[dict]:
-    client = get_client()
-    await load_session(client)
+    client = await authed_client()
     result = await client.search_tweet(query, product=product, count=count)
     return [format_tweet(t) for t in result]
 
 
 async def get_trending(category: str = "trending", count: int = 20) -> list[dict]:
-    client = get_client()
-    await load_session(client)
+    client = await authed_client()
     trends = await client.get_trends(category, count=count)
     return [format_trend(t) for t in trends]
 
 
 async def get_timeline(username: str, count: int = 20) -> list[dict]:
-    client = get_client()
-    await load_session(client)
+    client = await authed_client()
     user = await client.get_user_by_screen_name(username)
     result = await client.get_user_tweets(user.id, "Tweets", count=count)
     return [format_tweet(t) for t in result]
 
 
 async def get_user(username: str) -> dict:
-    client = get_client()
-    await load_session(client)
+    client = await authed_client()
     user = await client.get_user_by_screen_name(username)
     return format_user(user)
 
 
 async def get_tweet(tweet_id: str) -> dict:
-    client = get_client()
-    await load_session(client)
+    client = await authed_client()
     tweet = await client.get_tweet_by_id(tweet_id)
     return format_tweet(tweet)
 
 
 async def get_notifications(type: str = "All", count: int = 20) -> list[dict]:
-    client = get_client()
-    await load_session(client)
+    client = await authed_client()
     result = await client.get_notifications(type, count=count)
     return [format_notification(n) for n in result]
 
 
-async def check_mentions(peek: bool = False) -> list[dict]:
-    """Get new mentions since last check. Updates state unless peek=True."""
-    state = _load_state()
-    last_ts = state.get("last_mention_ts", 0)
+async def check_mentions(peek: bool = False) -> dict:
+    """Get new mentions since the bookmark in `TRON_TWITTER_STATE`.
+
+    Returns an envelope:
+        {"items": [...], "state": {...}}
+
+    `state` is the bookmark to persist back to the caller's state store
+    (e.g. the Tron vault). With `peek=True`, `state` is unchanged.
+    """
+    state = load_state()
+    last_ts = int(state.get("last_mention_ts", 0) or 0)
 
     notifications = await get_notifications("Mentions")
     new_mentions = [
@@ -118,12 +93,11 @@ async def check_mentions(peek: bool = False) -> list[dict]:
         if int(n.get("timestamp_ms", 0)) > last_ts
     ]
 
+    new_state = dict(state)
     if new_mentions and not peek:
-        newest_ts = max(int(n["timestamp_ms"]) for n in new_mentions)
-        state["last_mention_ts"] = newest_ts
-        _save_state(state)
+        new_state["last_mention_ts"] = max(int(n["timestamp_ms"]) for n in new_mentions)
 
-    return new_mentions
+    return {"items": new_mentions, "state": new_state}
 
 
 DM_INBOX_PARAMS = {
@@ -162,10 +136,8 @@ DM_INBOX_URL = "https://x.com/i/api/1.1/dm/inbox_initial_state.json"
 
 
 async def get_dm_inbox() -> dict:
-    """Fetch the DM inbox via Twitter's internal API. Returns conversations,
-    recent messages, and user info."""
-    client = get_client()
-    await load_session(client)
+    """Fetch the DM inbox via Twitter's internal API."""
+    client = await authed_client()
     response, _ = await client.get(
         DM_INBOX_URL,
         params=DM_INBOX_PARAMS,
@@ -190,7 +162,6 @@ async def get_dm_inbox() -> dict:
                 "name": user_info.get("name", ""),
                 "screen_name": user_info.get("screen_name", ""),
             })
-        # Attach the most recent message from entries
         for entry in inbox.get("entries", []):
             msg = entry.get("message", {})
             if msg.get("conversation_id") == conv_id:
@@ -209,16 +180,14 @@ async def get_dm_inbox() -> dict:
 
 
 async def get_dm_history(user_id: str, count: int = 20) -> list[dict]:
-    client = get_client()
-    await load_session(client)
+    client = await authed_client()
     result = await client.get_dm_history(user_id)
     messages = list(result)[:count]
     return [format_message(m) for m in messages]
 
 
 async def get_dm_history_by_username(username: str, count: int = 20) -> list[dict]:
-    client = get_client()
-    await load_session(client)
+    client = await authed_client()
     user = await client.get_user_by_screen_name(username)
     result = await client.get_dm_history(user.id)
     messages = list(result)[:count]
@@ -226,31 +195,34 @@ async def get_dm_history_by_username(username: str, count: int = 20) -> list[dic
 
 
 async def send_dm(user_id: str, text: str) -> dict:
-    client = get_client()
-    await load_session(client)
+    client = await authed_client()
     msg = await client.send_dm(user_id, text)
     return format_message(msg)
 
 
 async def send_dm_by_username(username: str, text: str) -> dict:
-    client = get_client()
-    await load_session(client)
+    client = await authed_client()
     user = await client.get_user_by_screen_name(username)
     msg = await client.send_dm(user.id, text)
     return format_message(msg)
 
 
-async def check_dms(peek: bool = False) -> list[dict]:
-    """Get new DMs since last check. Uses inbox API for proper discovery."""
-    client = get_client()
-    await load_session(client)
-    state = _load_state()
-    last_ts = state.get("last_dm_ts", "0")
+async def check_dms(peek: bool = False) -> dict:
+    """Get new DMs since the bookmark in `TRON_TWITTER_STATE`.
+
+    Returns an envelope:
+        {"items": [...], "state": {...}}
+
+    `state` is the bookmark to persist back to the caller's state store.
+    With `peek=True`, `state` is unchanged.
+    """
+    client = await authed_client()
+    state = load_state()
+    last_ts = state.get("last_dm_ts", "0") or "0"
 
     me = await client.user()
     my_id = me.id
 
-    # Fetch inbox to discover all conversations with recent activity
     response, _ = await client.get(
         DM_INBOX_URL,
         params=DM_INBOX_PARAMS,
@@ -287,69 +259,49 @@ async def check_dms(peek: bool = False) -> list[dict]:
 
     new_messages.sort(key=lambda m: m["time"])
 
+    new_state = dict(state)
     if new_messages and not peek:
-        newest_ts = max(m["time"] for m in new_messages)
-        state["last_dm_ts"] = newest_ts
-        _save_state(state)
+        new_state["last_dm_ts"] = max(m["time"] for m in new_messages)
 
-    return new_messages
-
-
-def _load_state() -> dict:
-    if STATE_PATH.exists():
-        with open(STATE_PATH) as f:
-            return json.load(f)
-    return {}
-
-
-def _save_state(state: dict):
-    ensure_dirs()
-    with open(STATE_PATH, "w") as f:
-        json.dump(state, f, indent=2)
+    return {"items": new_messages, "state": new_state}
 
 
 # --- Write operations ---
 
 
 async def post_tweet(text: str) -> dict:
-    client = get_client()
-    await load_session(client)
+    client = await authed_client()
     tweet = await client.create_tweet(text=text)
     return format_tweet(tweet)
 
 
 async def reply_to_tweet(tweet_id: str, text: str) -> dict:
-    client = get_client()
-    await load_session(client)
+    client = await authed_client()
     tweet = await client.create_tweet(text=text, reply_to=tweet_id)
     return format_tweet(tweet)
 
 
 async def like_tweet(tweet_id: str) -> dict:
-    client = get_client()
-    await load_session(client)
+    client = await authed_client()
     await client.favorite_tweet(tweet_id)
     return {"liked": True, "tweet_id": tweet_id}
 
 
 async def retweet_tweet(tweet_id: str) -> dict:
-    client = get_client()
-    await load_session(client)
+    client = await authed_client()
     await client.retweet(tweet_id)
     return {"retweeted": True, "tweet_id": tweet_id}
 
 
 async def follow_user_by_username(username: str) -> dict:
-    client = get_client()
-    await load_session(client)
+    client = await authed_client()
     user = await client.get_user_by_screen_name(username)
     await client.follow_user(user.id)
     return {"followed": True, "username": username, "user_id": user.id}
 
 
 async def unfollow_user_by_username(username: str) -> dict:
-    client = get_client()
-    await load_session(client)
+    client = await authed_client()
     user = await client.get_user_by_screen_name(username)
     await client.unfollow_user(user.id)
     return {"unfollowed": True, "username": username, "user_id": user.id}

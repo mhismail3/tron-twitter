@@ -19,8 +19,6 @@ from .client import (
     get_tweet,
     get_user,
     like_tweet,
-    login_with_cookies,
-    login_with_credentials,
     post_tweet,
     reply_to_tweet,
     retweet_tweet,
@@ -37,6 +35,15 @@ def output(data, fmt: str):
         click.echo(json.dumps(data, indent=2, ensure_ascii=False))
     else:
         _print_text(data)
+
+
+def output_envelope(envelope: dict):
+    """Emit a stateful-command envelope. Always JSON regardless of --format.
+
+    Stateful commands (`check-mentions`, `check-dms`) return a two-part
+    structure — items and new state — which has no sensible text rendering.
+    """
+    click.echo(json.dumps(envelope, indent=2, ensure_ascii=False))
 
 
 def _print_text(data):
@@ -103,11 +110,16 @@ def _print_item(item: dict):
 
 
 @click.group()
-@click.version_option(__version__)
+@click.version_option(__version__, prog_name="tron-twitter")
 @click.option("--format", "fmt", type=click.Choice(["json", "text"]), default="json", help="Output format")
 @click.pass_context
 def main(ctx, fmt):
-    """Twitter/X CLI for Tron."""
+    """Twitter/X CLI for Tron.
+
+    Stateless by design. Set TRON_TWITTER_COOKIES (JSON with auth_token and
+    ct0) for every invocation. For check-mentions / check-dms, also set
+    TRON_TWITTER_STATE (JSON) and persist the returned `state` field.
+    """
     ctx.ensure_object(dict)
     ctx.obj["fmt"] = fmt
 
@@ -121,38 +133,10 @@ def auth():
     pass
 
 
-@auth.command("login")
-def auth_login():
-    """Login with username/email/password."""
-    username = click.prompt("Username")
-    email = click.prompt("Email")
-    password = click.prompt("Password", hide_input=True)
-    try:
-        run_async(login_with_credentials(username, email, password))
-        click.echo("Logged in and cookies saved.")
-    except Exception as e:
-        click.echo(f"Login failed: {e}", err=True)
-        sys.exit(1)
-
-
-@auth.command("cookies")
-def auth_cookies():
-    """Login by pasting auth_token and ct0 from browser DevTools."""
-    click.echo("Open x.com → DevTools → Application → Cookies")
-    auth_token = click.prompt("auth_token")
-    ct0 = click.prompt("ct0")
-    try:
-        run_async(login_with_cookies(auth_token, ct0))
-        click.echo("Cookies saved.")
-    except Exception as e:
-        click.echo(f"Failed: {e}", err=True)
-        sys.exit(1)
-
-
 @auth.command("status")
 @click.pass_context
 def auth_status(ctx):
-    """Check if the current session is valid."""
+    """Check if the current session (TRON_TWITTER_COOKIES) is valid."""
     result = run_async(check_session())
     output(result, ctx.obj["fmt"])
 
@@ -245,12 +229,16 @@ def notifications(ctx, notif_type, count):
 
 @main.command("check-mentions")
 @click.option("--peek", is_flag=True, help="Preview without updating state")
-@click.pass_context
-def check_mentions_cmd(ctx, peek):
-    """Get new mentions since last check (stateful)."""
+def check_mentions_cmd(peek):
+    """Get new mentions since the TRON_TWITTER_STATE bookmark (stateful).
+
+    Always emits `{"items": [...], "state": {...}}` as JSON regardless of
+    --format. Persist `state` back to your state store (e.g. vault) so the
+    next call advances correctly.
+    """
     try:
-        results = run_async(check_mentions(peek=peek))
-        output(results, ctx.obj["fmt"])
+        envelope = run_async(check_mentions(peek=peek))
+        output_envelope(envelope)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -284,12 +272,16 @@ def dm_history(ctx, username, count):
 
 @main.command("check-dms")
 @click.option("--peek", is_flag=True, help="Preview without updating state")
-@click.pass_context
-def check_dms_cmd(ctx, peek):
-    """Get new DMs since last check (stateful)."""
+def check_dms_cmd(peek):
+    """Get new DMs since the TRON_TWITTER_STATE bookmark (stateful).
+
+    Always emits `{"items": [...], "state": {...}}` as JSON regardless of
+    --format. Persist `state` back to your state store (e.g. vault) so the
+    next call advances correctly.
+    """
     try:
-        results = run_async(check_dms(peek=peek))
-        output(results, ctx.obj["fmt"])
+        envelope = run_async(check_dms(peek=peek))
+        output_envelope(envelope)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
